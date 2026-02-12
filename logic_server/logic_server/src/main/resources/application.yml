@@ -1,0 +1,57 @@
+server:
+  port: 8081 # ???(8080)? ??? ??? 8081 ??
+
+spring:
+  # 1. PostgreSQL
+  datasource:
+    url: jdbc:postgresql://127.0.0.1:5432/pgdb
+    username: admin
+    password: rladmsdn1234!
+    driver-class-name: org.postgresql.Driver
+
+  # 2. JPA/Hibernate
+  jpa:
+    hibernate:
+      ddl-auto: validate # ?? ??? ?? ??? ?? validate ??
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        jdbc:
+          batch_size: 100
+
+  # 3. Redis
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      database: 0
+
+  # 4. Kafka
+  kafka:
+    bootstrap-servers: 127.0.0.1:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JacksonJsonSerializer
+    consumer:
+      group-id: logic-server-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JacksonJsonDeserializer
+      properties:
+        spring.json.trusted.packages: "com.example.logic_server.domain.character.dto"
+
+
+  # 5. Spring Batch
+  batch:
+    jdbc:
+      initialize-schema: always
+    job:
+      enabled: false # ?? ?? ? ???? ?? ??? ???? ??? ??
+
+# 6. Logging
+logging:
+  level:
+    org.hibernate.SQL: debug
+    org.hibernate.type.descriptor.sql.BasicBinder: trace

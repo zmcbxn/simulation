@@ -1,0 +1,45 @@
+{
+  "listeners": [
+    {
+      "address": "0.0.0.0",
+      "port": 8081,
+      "https": false
+    }
+  ],
+  "db_clients": [
+    {
+      "name": "default",
+      "rdbms": "postgresql",
+      "host": "host.docker.internal",
+      "port": 5432,
+      "dbname": "pgdb",
+      "user": "admin",
+      "passwd": "rladmsdn1234!",
+      "is_fast": false,
+      "number_of_connections": 5,
+      "timeout": 5.0
+    }
+  ],
+  "redis_clients": [
+    {
+      "name": "default",
+      "host": "host.docker.internal",
+      "port": 6379,
+      "passwd": "",
+      "db_index": 0,
+      "timeout": 0.0,
+      "max_connection_number": 16
+    }
+  ],
+  "app": {
+    "number_of_threads": 1,
+    "log": {
+      "log_path": "../log/",
+      "logfile_base_name": "drogon",
+      "log_size_limit": 100000000,
+      "max_run_time": 1.0,
+      "display_timestamp": true,
+      "log_level": "DEBUG"
+    }
+  }
+}
