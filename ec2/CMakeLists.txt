@@ -41,6 +41,12 @@ configure_file(
     COPYONLY
 )
 
+configure_file(
+    "${PROJECT_SOURCE_DIR}/ini/GW.ini"
+    "${PROJECT_BINARY_DIR}/GW.ini"
+    COPYONLY
+)
+
 add_executable(${PROJECT_NAME} ${SOURCES})
 
 # ##############################################################################

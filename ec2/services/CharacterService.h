@@ -15,7 +15,6 @@ public:
     void processSearchCharacter(const std::string& characterName, std::function<void(const Json::Value&)> callback);
     void processCharacterRequest(const std::string& serverId, const std::string& characterName, int logicType, std::function<void(const Json::Value&)> callback);
     void getFullApiFetch(const std::string& sCharacterId, const std::string& sServerId, const Json::Value& characterInfo, std::function<void(const Json::Value&)> callback);
-    void loadFromDatabase(const std::string& characterId, const std::string& serverId, std::function<void(const Json::Value&)> callback);
 
 private:
     ApiClient apiClient_;

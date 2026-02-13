@@ -4,7 +4,7 @@
 
 void CharacterService::updateRedisUpdateTime(const std::string& sCharacterId){
     auto redisClient = drogon::app().getRedisClient();
-    std::string redisKey = "character_update_time:" + sCharacterId;
+    std::string redisKey = "char:" + sCharacterId;
     long long currentTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
 
     redisClient->execCommandAsync(
@@ -12,7 +12,7 @@ void CharacterService::updateRedisUpdateTime(const std::string& sCharacterId){
         [](const drogon::nosql::RedisException& err) { // RedisError -> RedisException
             LOG_ERROR << "Failed to update Redis: " << err.what();
         },
-        "SET %s %s", // 명령어와 인자는 콜백 뒤에 옵니다.
+        "HSET %s update_time %s", // 명령어와 인자는 콜백 뒤에 옵니다.
         redisKey.c_str(), 
         std::to_string(currentTime).c_str()
     );
@@ -30,6 +30,19 @@ void CharacterService::processSearchCharacter(const std::string& characterName, 
 
         const Json::Value& characterJson = *(response->getJsonObject());
         const Json::Value& rows = characterJson["rows"];
+
+        auto redisClient = drogon::app().getRedisClient();
+        for(const auto& row : rows){
+            dao_->upsertBaseData(row);
+
+            std::string sCharacterId = row["characterId"].asString();
+            std::string redisKey = "char:" + sCharacterId;
+            redisClient->execCommandAsync(
+                [](const drogon::nosql::RedisResult& result){}, [](const drogon::nosql::RedisException& e){},
+                "HSETNX %s update_time 0", redisKey.c_str()
+            );
+        }
+
 
         if(rows.empty()){
             Json::Value errorPayload;
@@ -82,10 +95,9 @@ void CharacterService::processCharacterRequest(const std::string& serverId, cons
 
         std::string sServerId = characterInfo["serverId"].asString();
         std::string sCharacterId = characterInfo["characterId"].asString();
+        std::string redisKey = "char:" + sCharacterId;
 
         auto redisClient = drogon::app().getRedisClient();
-        std::string redisKey = "character_update_time:" + sCharacterId;
-
         redisClient->execCommandAsync(
             [=, this](const drogon::nosql::RedisResult& result) {
                 bool needUpdate = true;
@@ -98,8 +110,9 @@ void CharacterService::processCharacterRequest(const std::string& serverId, cons
                     }
                 } 
                 if (!needUpdate){
-                    // 캐시 유효 시 DB 로드
-                    this->loadFromDatabase(sCharacterId, sServerId, callback);
+                    Json::Value res;
+                    res["status"] = "FRESH";
+                    callback(res);
                 } else {
                     // 캐시 만료 시 fetchCharacterStatus를 포함한 11개 API 호출 시작
                     this->getFullApiFetch(sCharacterId, sServerId, characterInfo, callback);
@@ -109,7 +122,7 @@ void CharacterService::processCharacterRequest(const std::string& serverId, cons
                 LOG_ERROR << "Redis GET error: " << err.what();
                 this->getFullApiFetch(sCharacterId, sServerId, characterInfo, callback);
             },
-            "GET %s", redisKey.c_str()
+            "HGET %s update_time", redisKey.c_str()
         );
     });
 }
@@ -151,67 +164,111 @@ void CharacterService::getFullApiFetch(const std::string& sCharacterId, const st
     // 1. 능력치
     apiClient_.fetchCharacterStatus(sServerId, sCharacterId, [=, this](const drogon::HttpResponsePtr& res){
         if (!res || res->getStatusCode() != 200) finalize("Failed to fetch character status");
-        else { sharedCharacter->statusData = *(res->getJsonObject()); checkAndFinalize(); }
+        else { 
+            auto jsonPtr = res->getJsonObject();
+            if (jsonPtr) { sharedCharacter->statusData = *jsonPtr; checkAndFinalize(); }
+            else finalize("Character status JSON is null");
+        }
     });
 
     // 2. 장착 장비
     apiClient_.fetchCharacterEquipment(sServerId, sCharacterId, [=, this](const drogon::HttpResponsePtr& res){
         if (!res || res->getStatusCode() != 200) finalize("Failed to fetch character equipment");
-        else { sharedCharacter->equipmentData = *(res->getJsonObject()); checkAndFinalize(); }
+        else { 
+            auto jsonPtr = res->getJsonObject();
+            if (jsonPtr) { sharedCharacter->equipmentData = *jsonPtr; checkAndFinalize(); }
+            else finalize("Character equipment JSON is null");
+        }
     });
 
     // 3. 아바타
     apiClient_.fetchAvatar(sServerId, sCharacterId, [=, this](const drogon::HttpResponsePtr& res){
         if (!res || res->getStatusCode() != 200) finalize("Failed to fetch avatar");
-        else { sharedCharacter->avatarData = *(res->getJsonObject()); checkAndFinalize(); }
+        else { 
+            auto jsonPtr = res->getJsonObject();
+            if (jsonPtr) { sharedCharacter->avatarData = *jsonPtr; checkAndFinalize(); }
+            else finalize("Avatar JSON is null");
+        }
     });
 
     // 4. 크리쳐
     apiClient_.fetchCreature(sServerId, sCharacterId, [=, this](const drogon::HttpResponsePtr& res){
         if (!res || res->getStatusCode() != 200) finalize("Failed to fetch creature");
-        else { sharedCharacter->creatureData = *(res->getJsonObject()); checkAndFinalize(); }
+        else { 
+            auto jsonPtr = res->getJsonObject();
+            if (jsonPtr) { sharedCharacter->creatureData = *jsonPtr; checkAndFinalize(); }
+            else finalize("Creature JSON is null");
+        }
     });
 
     // 5. 휘장
     apiClient_.fetchFlags(sServerId, sCharacterId, [=, this](const drogon::HttpResponsePtr& res){
         if (!res || res->getStatusCode() != 200) finalize("Failed to fetch flags");
-        else { sharedCharacter->flagData = *(res->getJsonObject()); checkAndFinalize(); }
+        else { 
+            auto jsonPtr = res->getJsonObject();
+            if (jsonPtr) { sharedCharacter->flagData = *jsonPtr; checkAndFinalize(); }
+            else finalize("Flags JSON is null");
+        }
     });
 
     // 6. 안개융화
     apiClient_.fetchMist(sServerId, sCharacterId, [=, this](const drogon::HttpResponsePtr& res){
         if (!res || res->getStatusCode() != 200) finalize("Failed to fetch mist");
-        else { sharedCharacter->mistData = *(res->getJsonObject()); checkAndFinalize(); }
+        else { 
+            auto jsonPtr = res->getJsonObject();
+            if (jsonPtr) { sharedCharacter->mistData = *jsonPtr; checkAndFinalize(); }
+            else finalize("Mist JSON is null");
+        }
     });
 
     // 7. 스킬/스타일
     apiClient_.fetchSkills(sServerId, sCharacterId, [=, this](const drogon::HttpResponsePtr& res){
         if (!res || res->getStatusCode() != 200) finalize("Failed to fetch skills");
-        else { sharedCharacter->skillData = *(res->getJsonObject()); checkAndFinalize(); }
+        else { 
+            auto jsonPtr = res->getJsonObject();
+            if (jsonPtr) { sharedCharacter->skillData = *jsonPtr; checkAndFinalize(); }
+            else finalize("Skills JSON is null");
+        }
     });
 
     // 8. 버프 강화 장비
     apiClient_.fetchBuffEquipment(sServerId, sCharacterId, [=, this](const drogon::HttpResponsePtr& res){
         if (!res || res->getStatusCode() != 200) finalize("Failed to fetch buff equipment");
-        else { sharedCharacter->buffEquipData = *(res->getJsonObject()); checkAndFinalize(); }
+        else { 
+            auto jsonPtr = res->getJsonObject();
+            if (jsonPtr) { sharedCharacter->buffEquipData = *jsonPtr; checkAndFinalize(); }
+            else finalize("Buff equipment JSON is null");
+        }
     });
 
     // 9. 버프 강화 아바타
     apiClient_.fetchBuffAvatar(sServerId, sCharacterId, [=, this](const drogon::HttpResponsePtr& res){
         if (!res || res->getStatusCode() != 200) finalize("Failed to fetch buff avatar");
-        else { sharedCharacter->buffAvatarData = *(res->getJsonObject()); checkAndFinalize(); }
+        else { 
+            auto jsonPtr = res->getJsonObject();
+            if (jsonPtr) { sharedCharacter->buffAvatarData = *jsonPtr; checkAndFinalize(); }
+            else finalize("Buff avatar JSON is null");
+        }
     });
 
     // 10. 버프 강화 크리쳐
     apiClient_.fetchBuffCreature(sServerId, sCharacterId, [=, this](const drogon::HttpResponsePtr& res){
         if (!res || res->getStatusCode() != 200) finalize("Failed to fetch buff creature");
-        else { sharedCharacter->buffCreatureData = *(res->getJsonObject()); checkAndFinalize(); }
+        else { 
+            auto jsonPtr = res->getJsonObject();
+            if (jsonPtr) { sharedCharacter->buffCreatureData = *jsonPtr; checkAndFinalize(); }
+            else finalize("Buff creature JSON is null");
+        }
     });
 
     // 11. 타임라인 (최근 100건)
     apiClient_.fetchTimeline(sServerId, sCharacterId, [=, this](const drogon::HttpResponsePtr& res){
         if (!res || res->getStatusCode() != 200) finalize("Failed to fetch timeline");
-        else { sharedCharacter->timelineData = *(res->getJsonObject()); checkAndFinalize(); }
+        else { 
+            auto jsonPtr = res->getJsonObject();
+            if (jsonPtr) { sharedCharacter->timelineData = *jsonPtr; checkAndFinalize(); }
+            else finalize("Timeline JSON is null");
+        }
     });
 }
 
@@ -233,11 +290,4 @@ void CharacterService::saveToDatabase(const Character& character, const Json::Va
     }
     // 추가 데이터는 필요에 따라 별도의 DAO 메서드를 구현하여 저장할 수 있습니다.
 
-}
-
-void CharacterService::loadFromDatabase(const std::string& characterId, const std::string& serverId, std::function<void(const Json::Value&)> callback)
-{
-    Json::Value res;
-    res["info"] = "see you later";
-    callback(res);
 }
