@@ -3,13 +3,21 @@
 #include <cppkafka/cppkafka.h>
 #include <thread>
 #include <atomic>
+#include <string>
+#include <vector>
 #include <memory>
 #include <jsoncpp/json/json.h>
-#include "CharacterService.h"
+#include <functional>
+
+using TopicHandler = std::function<void(const Json::Value&)>;
 
 class KafkaConsumer {
 public:
-    KafkaConsumer(CharacterService& service);
+    KafkaConsumer(const std::string& brokers,
+                const std::string& groupId, // gruopId 오타 수정
+                const std::string& topicName,
+                const std::vector<std::string>& fields,
+                TopicHandler topicHandler);
     ~KafkaConsumer();
 
     void start();
@@ -18,10 +26,11 @@ public:
 private:
     void run();
 
-    CharacterService& characterService_;
-    std::thread workerThread_;
-    std::atomic<bool> running_{false};
-    
-    cppkafka::Configuration config_;
+    std::string topicName_;
+    std::vector<std::string> fields_;
+    TopicHandler topicHandler_;
+
     std::unique_ptr<cppkafka::Consumer> consumer_;
+    std::thread workerThread_;
+    std::atomic<bool> running_;
 };

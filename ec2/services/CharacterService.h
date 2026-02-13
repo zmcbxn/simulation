@@ -7,7 +7,8 @@
 class CharacterService {
 public:
     CharacterService() {
-        dao_ = std::make_unique<CharacterDAO>(drogon::app().getDbClient());
+        // dao_ = std::make_unique<CharacterDAO>(drogon::app().getDbClient());
+        std::unique_ptr<CharacterDAO> dao_;
     }
     ~CharacterService() = default; 
 

@@ -31,7 +31,9 @@ set(SOURCES
     dao/CharacterDao.cc
     services/ApiClient.cc
     services/CharacterService.cc
+    services/kafka/KafkaConfig.cc
     services/kafka/KafkaConsumer.cc
+    services/kafka/KafkaManager.cc
     services/kafka/KafkaProducer.cc
 )
 

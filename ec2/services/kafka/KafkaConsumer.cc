@@ -1,16 +1,23 @@
 #include "KafkaConsumer.h"
 #include <drogon/drogon.h>
 
-
-KafkaConsumer::KafkaConsumer(CharacterService& service) 
-    : characterService_(service) {
-    config_ = {
-        { "metadata.broker.list", "localhost:9092" },
-        { "group.id", "comm-server-group" },
+KafkaConsumer::KafkaConsumer(const std::string& brokers,
+                            const std::string& groupId,
+                            const std::string& topicName,
+                            const std::vector<std::string>& fields,
+                            TopicHandler topicHandler)
+    : topicName_(topicName), 
+      fields_(fields),
+      topicHandler_(topicHandler), 
+      running_(false)
+{
+    cppkafka::Configuration config = {
+        { "metadata.broker.list", brokers },
+        { "group.id", groupId },
         { "enable.auto.commit", true }
     };
     
-    consumer_ = std::make_unique<cppkafka::Consumer>(config_);
+    consumer_ = std::make_unique<cppkafka::Consumer>(config);
 }
 
 KafkaConsumer::~KafkaConsumer() {
@@ -19,12 +26,8 @@ KafkaConsumer::~KafkaConsumer() {
 
 void KafkaConsumer::start() {
     if (running_) return;
-
     running_ = true;
-    consumer_->subscribe({"CHARACTER"});
-
-    workerThread_ = std::thread([this]() {this->run();});
-    LOG_INFO << "Kakfa Consumer started on topic : CHARACTER";
+    workerThread_ = std::thread(&KafkaConsumer::run, this);
 }
 
 void KafkaConsumer::stop() {
@@ -35,26 +38,27 @@ void KafkaConsumer::stop() {
 }
 
 void KafkaConsumer::run(){
-    while (running_) {
-        cppkafka::Message msg = consumer_->poll(std::chrono::milliseconds(1000));
+    consumer_->subscribe({ topicName_ });
+    LOG_INFO << "Worker thread started for topic: " << topicName_;
 
-        if (!msg || msg.get_error()) continue;
+    while (running_) {
+        auto msg = consumer_->poll(std::chrono::milliseconds(100));
+        if(!msg || msg.get_error()) continue;
 
         std::string payload = msg.get_payload();
         Json::Value root;
-        Json::CharReaderBuilder builder;
-        std::string errs;
-        std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
+        Json::Reader reader;
 
-        if (reader->parse(payload.c_str(), payload.c_str() + payload.size(), &root, &errs)) {
-            std::string serverId = root["serverId"].asString();
-            std::string characterName = root["characterName"].asString();
-            std::string type = root["type"].asString();
+        if(reader.parse(payload, root)){
+            Json::Value extractedData;
+            for(const auto& field : fields_){
+                if(root.isMember(field)){
+                    extractedData[field] = root[field];
+                }
+            }
 
-            if (type == "REQUEST") {
-                LOG_INFO << "Received REQUEST for: " << characterName;
-
-                // characterService_.processSearchCharacter(characterName);
+            if(topicHandler_){
+                topicHandler_(extractedData);
             }
         }
     }
