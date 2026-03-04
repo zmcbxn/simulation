@@ -1,8 +1,8 @@
 #include "KafkaManager.h"
+#include "ServiceFactory.h"
 #include <drogon/drogon.h>
 
-KafkaManager::KafkaManager(std::shared_ptr<CharacterService> characterService)
-    : characterService_(characterService) {
+KafkaManager::KafkaManager(){
         registerHandlers();
     }
 
@@ -82,12 +82,12 @@ void KafkaManager::dispatch(const std::string& action, const Json::Value& data){
 }
 
 void KafkaManager::registerHandlers(){
-    topicHandlers_["processCharacterRequest"] = [this](const Json::Value& data){
-        this->characterService_->processCharacterRequest(
+    topicHandlers_["processCharacterRequest"] = [this](const Json::Value& data) {
+        ServiceFactory::getCharacterService()->processCharacterRequest(
             data["serverId"].asString(),
             data["characterName"].asString(),
             data["type"].asInt(),
-            [](const Json::Value& res){
+            [](const Json::Value& res) {
                 LOG_DEBUG << "Character process result: " << res.toStyledString();
             }
         );

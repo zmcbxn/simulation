@@ -1,6 +1,5 @@
 #include <drogon/drogon.h>
 #include "KafkaManager.h"
-#include "CharacterService.h"
 
 int main() {
     
@@ -11,6 +10,13 @@ int main() {
     //drogon::app().loadConfigFile("../config.yaml");
     drogon::app().loadConfigFile("../config/settings.json");
     
+
+    auto kafkaManager = std::make_shared<KafkaManager>();
+    if(kafkaManager->initialize("GW.ini")){
+        kafkaManager->startAll();
+    }
+
+
     drogon::app().run();
     return 0;
 }
