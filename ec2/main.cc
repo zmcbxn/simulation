@@ -1,5 +1,6 @@
 #include <drogon/drogon.h>
 #include "KafkaManager.h"
+#include "services/ServiceFactory.h"
 
 int main() {
     
@@ -16,6 +17,11 @@ int main() {
         kafkaManager->startAll();
     }
 
+    // DB/Redis 초기화 완료 후 CharacterService 생성 및 KafkaProducer 주입
+    drogon::app().registerBeginningAdvice([kafkaManager]() {
+        if(kafkaManager->getProducer())
+            ServiceFactory::getCharacterService()->setKafkaProducer(kafkaManager->getProducer());
+    });
 
     drogon::app().run();
     return 0;

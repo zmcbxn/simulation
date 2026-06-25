@@ -61,7 +61,9 @@ void MyHttpController::getCharacter(const HttpRequestPtr& req,
 {
     int logicType = 0;
 
-    characterService.processCharacterRequest(serverId, characterName, logicType, [callback](const Json::Value& characterData) {
+    // TODO: 로그인 구현 후 세션에서 userId 추출하여 전달
+    std::string userId = "";
+    characterService.processCharacterRequest(serverId, characterName, logicType, userId, [callback](const Json::Value& characterData) {
         Json::Value response;
         if(characterData.isMember("error")) {
             response["status"] = "Character not found";
@@ -88,7 +90,9 @@ void MyHttpController::searchAll(const HttpRequestPtr& req,
                                  std::function<void (const HttpResponsePtr& )> &&callback,
                                  const std::string& name)
 {
-    characterService.processSearchCharacter(name, [callback](const Json::Value& characterData) {
+    // TODO: 로그인 구현 후 세션에서 userId 추출하여 전달
+    std::string userId = "";
+    characterService.processSearchCharacter(name, userId, [callback](const Json::Value& characterData) {
         auto resp = HttpResponse::newHttpJsonResponse(characterData);
         callback(resp);
     });

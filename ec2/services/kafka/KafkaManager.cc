@@ -32,9 +32,8 @@ bool KafkaManager::initialize(const std::string& configPath){
     std::string groupId = config_.getValue("Kafka", "group_id");
 
     if(!initConsumers(brokers, groupId)) return false;
-    // if(!initProducers(brokers)) return false;
-    // 나중에 필요한 경우 주석 해제하고 로직 추가
-    
+    if(!initProducers(brokers)) return false;
+
     return true;
 }
 
@@ -60,7 +59,7 @@ bool KafkaManager::initConsumers(const std::string& brokers, const std::string& 
 }
 
 bool KafkaManager::initProducers(const std::string& brokers){
-    producer_ = std::make_unique<KafkaProducer>(brokers);
+    producer_ = std::make_shared<KafkaProducer>(brokers);
     std::vector<std::string> pTopics = config_.getVector("Kafka", "produce_topic");
     if(pTopics.empty()){
         LOG_WARN << "No produce topics defined in config.";
@@ -83,10 +82,13 @@ void KafkaManager::dispatch(const std::string& action, const Json::Value& data){
 
 void KafkaManager::registerHandlers(){
     topicHandlers_["processCharacterRequest"] = [this](const Json::Value& data) {
+        // TODO: 로그인 구현 후 Kafka 메시지에 userId 포함하여 전달
+        std::string userId = data.get("userId", "").asString();
         ServiceFactory::getCharacterService()->processCharacterRequest(
             data["serverId"].asString(),
             data["characterName"].asString(),
             data["type"].asInt(),
+            userId,
             [](const Json::Value& res) {
                 LOG_DEBUG << "Character process result: " << res.toStyledString();
             }

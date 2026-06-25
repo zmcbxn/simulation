@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include <jsoncpp/json/json.h>
+#include <json/json.h>
 #include <functional>
 
 using TopicHandler = std::function<void(const Json::Value&)>;

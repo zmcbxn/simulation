@@ -1,6 +1,6 @@
 #pragma once
 #include <string>
-#include <jsoncpp/json/json.h>
+#include <json/json.h>
 
 struct Character{
     Character() = default;
@@ -15,7 +15,7 @@ struct Character{
     Json::Value equipmentData;
     Json::Value avatarData;
     Json::Value creatureData;
-    Json::Value flagData;
+    Json::Value oathData;
     Json::Value mistData;
     Json::Value skillData;
     Json::Value buffEquipData;
@@ -34,7 +34,7 @@ struct Character{
         payload["equipmentData"] = equipmentData;
         payload["avatarData"] = avatarData;
         payload["creatureData"] = creatureData;
-        payload["flagData"] = flagData;
+        payload["oathData"] = oathData;
         payload["mistData"] = mistData;
         payload["skillData"] = skillData;
         payload["timelineData"] = timelineData;
@@ -62,8 +62,6 @@ struct Character{
         response["creature"] = creatureData.isNull() ? Json::Value(Json::objectValue) : creatureData;
         return response;
     }
-
-    Json::Value getFlagResponse() const { return flagData.isNull() ? Json::Value(Json::objectValue) : flagData; }
 
     Json::Value getMistResponse() const { return mistData.isNull() ? Json::Value(Json::objectValue) : mistData; }
 

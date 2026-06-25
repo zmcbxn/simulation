@@ -16,6 +16,7 @@ public:
     bool initialize(const std::string& configPath);
     void startAll();
     void stopAll();
+    std::shared_ptr<KafkaProducer> getProducer() { return producer_; }
 
 private:
     void registerHandlers();
@@ -24,6 +25,6 @@ private:
     bool initProducers(const std::string& brokers);
     KafkaConfig config_;
     std::map<std::string, std::unique_ptr<KafkaConsumer>> consumer_;
-    std::unique_ptr<KafkaProducer> producer_;
+    std::shared_ptr<KafkaProducer> producer_;
     std::map<std::string, TopicHandler> topicHandlers_;
 };

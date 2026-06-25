@@ -3,58 +3,96 @@
 #include <stdexcept>
 
 ApiKeyManager::ApiKeyManager() {
-    // 1. 여기서 파일을 읽습니다. 실패하면 이 함수 안에서 throw가 발생하므로 
-    // 아래 타이머 로직으로 넘어가지 않고 프로그램이 안전하게 멈춥니다.
     loadKeysFromFile("ApiKeys.txt");
-
-    // 2. 1분마다 카운트 초기화 타이머 설정
     drogon::app().getLoop()->runEvery(60.0, [this]() {
-        resetCounts();
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto& k : serverKeys_) k.usageCount = 0;
     });
 }
 
-void ApiKeyManager::loadKeysFromFile(const std::string& filename){
+void ApiKeyManager::loadKeysFromFile(const std::string& filename) {
     std::ifstream file(filename);
-    if(!file.is_open()) {
-        // 여기서 이미 에러 처리를 완벽하게 하고 있습니다!
+    if (!file.is_open())
         throw std::runtime_error("Failed to open API keys file: " + filename);
-    }
-
     std::string line;
-    while(std::getline(file, line)){
-        if(line.empty() || line[0] == '#') continue; 
+    while (std::getline(file, line)) {
+        if (line.empty() || line[0] == '#') continue;
         addApiKey(line);
     }
-    file.close();
 }
 
 void ApiKeyManager::addApiKey(const std::string& apiKey) {
     std::lock_guard<std::mutex> lock(mutex_);
-    apiKeys_.push_back({apiKey, 0});
+    serverKeys_.push_back({apiKey, 0});
 }
 
-std::string ApiKeyManager::getApiKey() {
+std::string ApiKeyManager::pickServerKey() {
     std::lock_guard<std::mutex> lock(mutex_);
-    
-    if(apiKeys_.empty()) {
-        throw std::runtime_error("No API keys available in manager");
-    }
+    if (serverKeys_.empty())
+        throw std::runtime_error("No server API keys available");
 
-    // 가장 적게 사용된 키를 선택 (부하 분산)
-    int minIndex = 0;
-    for(int i = 1; i < apiKeys_.size(); ++i) {
-        if(apiKeys_[i].usageCount < apiKeys_[minIndex].usageCount) {
-            minIndex = i;
+    int minIdx = -1;
+    for (int i = 0; i < (int)serverKeys_.size(); ++i) {
+        if (serverKeys_[i].usageCount >= maxUsagePerKey_) continue;
+        if (minIdx == -1 || serverKeys_[i].usageCount < serverKeys_[minIdx].usageCount)
+            minIdx = i;
+    }
+    if (minIdx == -1)
+        throw std::runtime_error("All server API keys have reached usage limit (1000/min)");
+
+    serverKeys_[minIdx].usageCount++;
+    return serverKeys_[minIdx].apiKey;
+}
+
+void ApiKeyManager::getApiKey(const std::string& userId,
+                               std::function<void(const std::string&)> callback) {
+    if (userId.empty()) {
+        try {
+            callback(pickServerKey());
+        } catch (const std::exception& e) {
+            LOG_ERROR << "ApiKeyManager: " << e.what();
+            callback("");
         }
+        return;
     }
 
-    apiKeys_[minIndex].usageCount++;
-    return apiKeys_[minIndex].apiKey;
+    // 로그인 유저: Redis에서 캐싱된 키 조회
+    auto redis = drogon::app().getRedisClient();
+    redis->execCommandAsync(
+        [callback, userId](const drogon::nosql::RedisResult& r) {
+            if (!r.isNil() && !r.asString().empty()) {
+                callback(r.asString());
+            } else {
+                // TODO: Redis 미스 시 DB(users 테이블)에서 조회 후 cacheUserApiKey 호출
+                // 현재는 서버 풀로 폴백
+                LOG_WARN << "No cached API key for user: " << userId << ", falling back to server pool";
+                try {
+                    ApiKeyManager::instance().getApiKey("", callback);
+                } catch (...) {
+                    callback("");
+                }
+            }
+        },
+        [callback](const drogon::nosql::RedisException& e) {
+            LOG_ERROR << "Redis error in getApiKey: " << e.what();
+            callback("");
+        },
+        "GET user:%s:apikey", userId.c_str()
+    );
 }
 
-void ApiKeyManager::resetCounts(){
-    std::lock_guard<std::mutex> lock(mutex_);
-    for(auto& keyInfo : apiKeys_) {
-        keyInfo.usageCount = 0;
-    }
+void ApiKeyManager::cacheUserApiKey(const std::string& userId,
+                                     const std::string& apiKey,
+                                     std::function<void(bool)> callback) {
+    auto redis = drogon::app().getRedisClient();
+    redis->execCommandAsync(
+        [callback](const drogon::nosql::RedisResult&) {
+            callback(true);
+        },
+        [callback](const drogon::nosql::RedisException& e) {
+            LOG_ERROR << "Redis error in cacheUserApiKey: " << e.what();
+            callback(false);
+        },
+        "SET user:%s:apikey %s EX 3600", userId.c_str(), apiKey.c_str()
+    );
 }

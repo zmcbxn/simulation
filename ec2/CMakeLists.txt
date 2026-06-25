@@ -25,10 +25,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(SOURCES
     main.cc
     common/ApiKeyManager.cc
+    common/jsoncpp_sv_shim.cc
     controllers/MyHttpController.cc
     controllers/MyWebSocketServer.cc
     controllers/RestController.cc
-    dao/CharacterDao.cc
+    dao/CharacterDAO.cc
     services/ApiClient.cc
     services/CharacterService.cc
     services/ServiceFactory.cc
@@ -64,13 +65,17 @@ find_package(PostgreSQL REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(RDKAFKA REQUIRED rdkafka)
 find_package(CppKafka REQUIRED)
-target_link_libraries(${PROJECT_NAME} PRIVATE 
+target_link_libraries(${PROJECT_NAME} PRIVATE
     Drogon::Drogon
     PostgreSQL::PostgreSQL
     hiredis
     CppKafka::cppkafka
     ${RDKAFKA_LIBRARIES}
+    dl
 )
+# jsoncpp 1.9.7 헤더가 C++17+에서 string_view 오버로드를 선언하지만
+# 라이브러리는 해당 심볼 없이 컴파일됨 → 링커 에러 방지
+target_compile_definitions(${PROJECT_NAME} PRIVATE JSONCPP_HAS_STRING_VIEW=0)
 
 # ##############################################################################
 
