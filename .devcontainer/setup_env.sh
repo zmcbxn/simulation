@@ -22,16 +22,16 @@ make -j$(nproc)
 sudo make install
 sudo ldconfig # 시스템 라이브러리 목록 갱신 [cite: 2026-02-11]
 
-echo "🚀 [3/4] Drogon 시스템 설치 (make install) 중..."
-# 사용자님의 경로인 /workspaces/cal_site/drogon 을 가정합니다.
-if [ -d "/workspaces/cal_site/drogon/build" ]; then
-    cd /workspaces/cal_site/drogon/build
-    sudo make install
-    sudo ldconfig
-    echo "✅ Drogon 설치 완료!"
-else
-    echo "❌ Drogon 빌드 폴더를 찾을 수 없습니다. 경로를 확인해주세요."
+echo "🚀 [3/4] Drogon 소스 빌드 및 설치 중..."
+if [ ! -d "/tmp/drogon" ]; then
+    git clone https://github.com/drogonframework/drogon.git /tmp/drogon --recurse-submodules
 fi
+cd /tmp/drogon && mkdir -p build && cd build
+cmake ..
+make -j$(nproc)
+sudo make install
+sudo ldconfig
+echo "✅ Drogon 설치 완료!"
 
 echo "🚀 [4/4] 최종 시스템 라이브러리 확인..."
 sudo ldconfig
