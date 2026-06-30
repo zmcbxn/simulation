@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# VSCode
+.vscode/
+
+# 외부 라이브러리
+cppkafka/
+drogon/
+Protocol_Buffers
+
+# 빌드 산출물
+ec2/build/
