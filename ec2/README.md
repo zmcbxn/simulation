@@ -8,7 +8,7 @@ Nexon 외부 API 데이터 수집, DB/Redis 저장, Logic 서버와의 Kafka 통
 ## 전체 시스템 아키텍처
 
 ```
-[React Web]
+[Web 서버 (Java/Spring)]
     │  HTTP
     ▼
 [Logic 서버]  ◄──── Kafka ────► [Comm 서버 / ec2]
@@ -25,7 +25,7 @@ Nexon 외부 API 데이터 수집, DB/Redis 저장, Logic 서버와의 Kafka 통
 
 | 서버 | 역할 |
 |------|------|
-| **Web (React)** | 캐릭터 검색 UI, 스펙 시뮬레이션 UI |
+| **Web (Java/Spring)** | 캐릭터 검색 UI, 스펙 시뮬레이션 UI |
 | **Logic 서버** | 비즈니스 판단, 데이터 가공, Web 응답 |
 | **Comm 서버 (ec2, 이 저장소)** | Nexon API 호출, DB/Redis 저장, Kafka 발행 |
 
@@ -49,7 +49,8 @@ ec2/
 │   └── apikeys.txt                 # Nexon API 키
 │
 ├── common/
-│   └── ApiKeyManager               # API 키 로드/관리
+│   ├── ApiKeyManager               # API 키 로드/관리
+│   └── jsoncpp_sv_shim.cc          # jsoncpp string_view 호환 shim (dlsym)
 │
 ├── controllers/
 │   ├── RestController              # HTTP REST 엔드포인트 (Web → Comm 직접 호출용)
@@ -75,43 +76,53 @@ ec2/
 
 ---
 
+## HTTP API 엔드포인트
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| `GET` | `/api/character/all/{name}` | 닉네임으로 전 서버 캐릭터 목록 검색 |
+| `GET` | `/api/character/{server}/{name}` | 특정 서버 캐릭터 상세 조회 (11종 API 수집) |
+
+---
+
 ## 핵심 흐름
 
-### 1. 캐릭터 검색
+### 1. 캐릭터 검색 (`/api/character/all/{name}`)
 
 ```
-Web → Logic → Kafka → CharacterService::processSearchCharacter
-  └─ Nexon API fetchCharacter(name)
-  └─ DB upsertBaseData (캐릭터 base 등록)
-  └─ Redis HSETNX char:{id} update_time 0 (키 초기화)
+RestController → CharacterService::processSearchCharacter
+  └─ Nexon API fetchCharacter(name)  ← 항상 Nexon API 호출
+  └─ DB upsertBaseData (캐릭터 base 등록/갱신)
   └─ 검색 결과 목록 반환
+
+※ 추후 개선 예정: DB에 이미 있으면 DB에서 반환, 없으면 Nexon API 호출
 ```
 
-### 2. 캐릭터 상세 조회 (캐시 판단)
+### 2. 캐릭터 상세 조회 (`/api/character/{server}/{name}`)
 
 ```
-Web → Logic → Kafka → CharacterService::processCharacterRequest
-  └─ Redis HGET char:{id} update_time
-       ├─ 시간 이내 → FRESH 반환 (API 호출 없음)
+RestController → CharacterService::processCharacterRequest
+  └─ Redis HGET char:{characterId} update_time
+       ├─ 1800초 이내 → FRESH 반환 (Nexon API 호출 없음)
        │    logicType == 1 (수동 새로고침): 쿨다운 60초
-       │    logicType != 1 (자동, 검색 진입): 쿨다운 1800초
        └─ 만료 or 키 없음 → getFullApiFetch 호출
 ```
 
-### 3. 전체 API 수집 (getFullApiFetch)
+### 3. 전체 API 수집 (`getFullApiFetch`)
 
 ```
 CharacterService::getFullApiFetch
   └─ ApiFetchContext 생성 (집계 객체)
-  └─ 전체 타임아웃 30초 설정 (trantor::EventLoop::runAfter)
+  └─ 전체 타임아웃 30초 (trantor::EventLoop::runAfter)
   └─ 11개 Nexon API 병렬 호출 (fetchWithRetry, 최대 3회 재시도)
-       ├─ 능력치 / 장착장비 / 아바타 / 크리쳐 / 휘장
-       ├─ 안개융화 / 스킬 / 버프강화장비 / 버프아바타 / 버프크리쳐 / 타임라인
+       ├─ 능력치 / 장착장비 / 아바타 / 크리쳐
+       ├─ 서약 / 안개융화 / 스킬
+       └─ 버프장비 / 버프아바타 / 버프크리쳐 / 타임라인
   └─ 모든 API 완료 시 (All-or-Nothing)
-       ├─ DB 저장 (saveToDatabase)
-       ├─ Redis update_time 갱신
+       ├─ DB 저장 (saveToDatabase → 12개 테이블)
+       ├─ Redis update_time 갱신 + TTL 7일 설정
        └─ Kafka publish → comm.to.logic (CHARACTER_READY)
-  └─ 하나라도 실패 시 → 전체 에러 반환 (나머지 결과 무시)
+  └─ 하나라도 실패 시 → 전체 에러 반환
 ```
 
 ---
@@ -131,60 +142,59 @@ CharacterService::getFullApiFetch
 
 ## Redis 사용 현황
 
-| 키 | 필드 | 내용 | 상태 |
-|----|------|------|------|
-| `char:{characterId}` | `update_time` | 마지막 API 수집 시각 (Unix timestamp) | 구현 완료 |
+| 키 | 필드 | 내용 | TTL |
+|----|------|------|-----|
+| `char:{characterId}` | `update_time` | 마지막 API 수집 시각 (Unix timestamp) | 7일 (갱신 시 리셋) |
 | `char:{characterId}` | 캐릭터 데이터 필드들 | 스펙 시뮬레이션용 캐릭터 정보 | **미구현** |
-
-> Redis에 캐릭터 스펙 데이터를 저장하는 이유: 스펙 시뮬레이션은 DB 대신 Redis에서 빠른 read/write로 처리 예정.
 
 ---
 
 ## DB 저장 현황 (CharacterDAO)
 
-| 메서드 | 테이블 | 상태 |
-|--------|--------|------|
-| `upsertBaseData` | `character.base_data` | 구현 완료 |
-| `upsertStatusData` | `character.status_data` | 구현 완료 |
-| `upsertEquipmentData` | `character.equipment_data` | 구현 완료 |
-| `upsertAvatarData` | 미정 | **미구현** (CharacterService.cc 주석 처리) |
-| `upsertCreatureData` | 미정 | **미구현** |
-| `upsertFlagData` | 미정 | **미구현** |
-| `upsertMistData` | 미정 | **미구현** |
-| `upsertSkillData` | 미정 | **미구현** |
-| `upsertBuffEquipData` | 미정 | **미구현** |
-| `upsertBuffAvatarData` | 미정 | **미구현** |
-| `upsertBuffCreatureData` | 미정 | **미구현** |
-| `upsertTimelineData` | 미정 | **미구현** |
-
-> `saveToDatabase`에 주석 처리된 DAO 호출이 있음. 각 DAO 구현 완료 후 주석 해제.
+| 메서드 | 테이블 | 저장 내용 |
+|--------|--------|-----------|
+| `upsertBaseData` | `character.base_data` | 캐릭터 기본 정보 (이름/서버/직업/레벨/명성) |
+| `upsertStatusData` | `character.status_data` | 능력치 raw_data + 요약 |
+| `upsertEquipmentData` | `character.equipment_data` | 장착 장비 슬롯별 (강화/증폭/봉인/인챈트/융합/튠) |
+| `upsertOathData` | `character.oath_data` | 서약 본체 + 묵언의 진의 단계 + raw_data |
+| `upsertAvatarData` | `character.avatar_data` | 아바타 슬롯별 (아이템/옵션/클론/엠블렘) |
+| `upsertCreatureData` | `character.creature_data` | 크리쳐 + 클론 + 아티팩트 |
+| `upsertMistData` | `character.mist_data` | 안개융화 레벨/경험치/raw_data |
+| `upsertSkillData` | `character.skill_data` | 스킬 해시 + 액티브/패시브 + raw_data |
+| `upsertBuffEquipData` | `character.buff_equip_data` | 버프 강화 장비 슬롯별 |
+| `upsertBuffAvatarData` | `character.buff_avatar_data` | 버프 아바타 슬롯별 + 엠블렘 유무 |
+| `upsertBuffCreatureData` | `character.buff_creature_data` | 버프 크리쳐 |
+| `upsertTimelineData` | `character.timeline_data` | 최근 30일 타임라인 이벤트 |
 
 ---
 
 ## 진행 현황
 
 ### 완료
+
 - [x] Drogon 기반 Comm 서버 골격
 - [x] Nexon API 11종 비동기 호출 (`ApiClient`)
-- [x] 캐릭터 검색 / 캐시 판단 로직
-- [x] `getFullApiFetch` 리팩토링
-  - [x] `ApiFetchContext` 집계 객체
-  - [x] `std::mutex`로 병렬 쓰기 Race Condition 방지
-  - [x] `fetchWithRetry` (최대 3회 재시도)
-  - [x] 전체 타임아웃 30초
-  - [x] All-or-Nothing 완료/에러 확정 (`std::atomic<bool> done`)
-  - [x] Kafka `CHARACTER_READY` 발행 (`publishCharacterReady`)
-- [x] DB 저장: base / status / equipment
-- [x] Kafka Consumer 핸들러 틀 (`KafkaManager::registerHandlers`)
-- [x] Kafka Producer 초기화 및 `KafkaManager::getProducer()` 노출
-- [x] `ServiceFactory` → `CharacterService`에 KafkaProducer 주입 (`main.cc`)
+  - 능력치 / 장착장비 / 아바타 / 크리쳐 / 서약 / 안개융화 / 스킬 / 버프장비 / 버프아바타 / 버프크리쳐 / 타임라인
+  - ~~휘장(flag)~~ → Nexon API에서 완전 삭제됨
+- [x] 캐릭터 검색 / 캐시 판단 로직 (update_time 기반 1800초/60초)
+- [x] `getFullApiFetch` 구현
+  - `ApiFetchContext` 집계 객체
+  - `std::mutex`로 병렬 쓰기 Race Condition 방지
+  - `fetchWithRetry` (최대 3회 재시도)
+  - 전체 타임아웃 30초
+  - All-or-Nothing 완료/에러 확정 (`std::atomic<bool> done`)
+- [x] DB 저장 전 테이블 구현 (CharacterDAO 12종)
+- [x] Redis `update_time` 관리 + TTL 7일
+- [x] Kafka Consumer/Producer 초기화 및 `CHARACTER_READY` 발행 틀
+- [x] jsoncpp string_view 무한재귀 버그 수정 (dlsym shim)
 
-### 진행 중 / 예정
-- [ ] Redis에 캐릭터 스펙 데이터 저장 (시뮬레이션용)
-- [ ] DB 저장 나머지 항목 (avatar ~ timeline) DAO 구현 후 주석 해제
-- [ ] 스펙 시뮬레이션 로직 (Logic 서버 또는 Comm 서버)
-- [ ] Logic 서버 구현 (별도 저장소)
-- [ ] Web 서버 (React) 구현 (별도 저장소)
+### 예정
+
+- [ ] Redis 캐릭터 스펙 데이터 저장 (로직 서버 설계 후 진행)
+- [ ] 검색 DB-first: DB에 있으면 Nexon API 호출 생략
+- [ ] FRESH 시 DB 데이터 반환 (현재는 `{"status":"FRESH"}` 만 반환)
+- [ ] Kafka 메시지 포맷/토픽 확정 (Logic 서버 연동 시)
+- [ ] 유저/인증 시스템
 
 ---
 
@@ -202,4 +212,7 @@ CharacterService::getFullApiFetch
 mkdir build && cd build
 cmake ..
 make -j$(nproc)
+./ec2
 ```
+
+> 실행 디렉터리에 `apikeys.txt`, `GW.ini` 가 복사되어 있어야 한다 (CMake configure_file로 자동 처리).
