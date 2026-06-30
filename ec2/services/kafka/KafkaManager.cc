@@ -71,29 +71,44 @@ bool KafkaManager::initProducers(const std::string& brokers){
     return true;
 }
 
-void KafkaManager::dispatch(const std::string& action, const Json::Value& data){
-    auto it = topicHandlers_.find(action);
+void KafkaManager::dispatch(const std::string& /*action*/, const Json::Value& data){
+    std::string msgAction = data.get("action", "").asString();
+    auto it = topicHandlers_.find(msgAction);
     if(it != topicHandlers_.end()){
         it->second(data);
     }else{
-        LOG_WARN << "Unknown action received: " << action;
+        LOG_WARN << "Unknown action received: " << msgAction;
     }
 }
 
 void KafkaManager::registerHandlers(){
-    topicHandlers_["processCharacterRequest"] = [this](const Json::Value& data) {
-        // TODO: 로그인 구현 후 Kafka 메시지에 userId 포함하여 전달
-        std::string userId = data.get("userId", "").asString();
+    topicHandlers_["character_search"] = [this](const Json::Value& data) {
+        std::string userId        = data.get("userId", "").asString();
+        std::string correlationId = data.get("correlationId", "").asString();
+        ServiceFactory::getCharacterService()->processSearchCharacter(
+            data["characterName"].asString(),
+            userId,
+            correlationId,
+            [](const Json::Value& res) {
+                LOG_DEBUG << "character_search result: " << res.toStyledString();
+            }
+        );
+    };
+
+    topicHandlers_["character_detail"] = [this](const Json::Value& data) {
+        std::string userId         = data.get("userId", "").asString();
+        std::string correlationId  = data.get("correlationId", "").asString();
         ServiceFactory::getCharacterService()->processCharacterRequest(
             data["serverId"].asString(),
             data["characterName"].asString(),
             data["type"].asInt(),
             userId,
+            correlationId,
             [](const Json::Value& res) {
-                LOG_DEBUG << "Character process result: " << res.toStyledString();
+                LOG_DEBUG << "character_detail result: " << res.toStyledString();
             }
         );
     };
 
-    // handler 추가
+    // TODO: timeline, auction 핸들러 추가
 }

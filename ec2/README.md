@@ -29,12 +29,57 @@ Nexon 외부 API 데이터 수집, DB/Redis 저장, Logic 서버와의 Kafka 통
 | **Logic 서버** | 비즈니스 판단, 데이터 가공, Web 응답 |
 | **Comm 서버 (ec2, 이 저장소)** | Nexon API 호출, DB/Redis 저장, Kafka 발행 |
 
-### Kafka 토픽
+### Kafka 토픽 및 액션 명세
 
-| 방향 | 토픽 | 내용 |
-|------|------|------|
-| Logic → Comm | (GW.ini `consume_topics`) | `processCharacterRequest` 등 요청 |
-| Comm → Logic | `comm.to.logic` | `CHARACTER_READY` 완료 알림 |
+**[Java → ec2] 토픽: `SEARCH`**
+
+| action | 설명 | 상태 |
+|--------|------|------|
+| `character_search` | 닉네임으로 전 서버 목록 검색 | 구현 완료 |
+| `character_detail` | 특정 캐릭터 상세 수집 (11종 API) | 구현 완료 |
+| `timeline` | 타임라인 조회 | 미구현 |
+| `auction` | 경매장 검색 | 미구현 |
+
+메시지 형식:
+```json
+// character_search
+{ "correlationId": "uuid", "action": "character_search", "characterName": "더스크워치" }
+
+// character_detail
+{ "correlationId": "uuid", "action": "character_detail", "serverId": "prey", "characterName": "더스크워치", "type": 0 }
+```
+> `correlationId`: Logic 서버가 생성한 UUID. INFO 응답 매칭용  
+> `type`: 0 = 자동(쿨다운 1800초), 1 = 수동 새로고침(쿨다운 60초)
+
+---
+
+**[ec2 → Java] 토픽: `INFO`**
+
+| action | 설명 | 상태 |
+|--------|------|------|
+| `character_search_ready` | 목록 반환 | 구현 완료 |
+| `character_search_failed` | 목록 검색 실패 | 구현 완료 |
+| `character_detail_ready` | 상세 수집 완료 | 구현 완료 |
+| `character_detail_failed` | 상세 수집 실패 | 구현 완료 |
+| `timeline_ready` | 타임라인 반환 | 미구현 |
+| `timeline_failed` | 타임라인 실패 | 미구현 |
+| `auction_ready` | 경매장 결과 반환 | 미구현 |
+| `auction_failed` | 경매장 실패 | 미구현 |
+
+메시지 형식:
+```json
+// character_search_ready
+{ "correlationId": "uuid", "action": "character_search_ready", "characterName": "더스크워치", "serverList": ["prey", "sirocco", "cain"] }
+
+// character_search_failed
+{ "correlationId": "uuid", "action": "character_search_failed", "characterName": "더스크워치", "reason": "..." }
+
+// character_detail_ready
+{ "correlationId": "uuid", "action": "character_detail_ready", "characterId": "f0fa67...", "serverId": "prey" }
+
+// character_detail_failed
+{ "correlationId": "uuid", "action": "character_detail_failed", "characterId": "f0fa67...", "serverId": "prey", "reason": "API fetch timed out" }
+```
 
 ---
 
@@ -118,11 +163,13 @@ CharacterService::getFullApiFetch
        ├─ 능력치 / 장착장비 / 아바타 / 크리쳐
        ├─ 서약 / 안개융화 / 스킬
        └─ 버프장비 / 버프아바타 / 버프크리쳐 / 타임라인
+  └─ 동일 캐릭터 중복 요청 시 fetch 1회만 실행 (inFlight 맵)
+       └─ 대기 중인 correlationId 전체에 결과 발행
   └─ 모든 API 완료 시 (All-or-Nothing)
        ├─ DB 저장 (saveToDatabase → 12개 테이블)
        ├─ Redis update_time 갱신 + TTL 7일 설정
-       └─ Kafka publish → comm.to.logic (CHARACTER_READY)
-  └─ 하나라도 실패 시 → 전체 에러 반환
+       └─ Kafka INFO 토픽 → character_detail_ready 발행
+  └─ 하나라도 실패 시 → character_detail_failed 발행
 ```
 
 ---
@@ -185,7 +232,11 @@ CharacterService::getFullApiFetch
   - All-or-Nothing 완료/에러 확정 (`std::atomic<bool> done`)
 - [x] DB 저장 전 테이블 구현 (CharacterDAO 12종)
 - [x] Redis `update_time` 관리 + TTL 7일
-- [x] Kafka Consumer/Producer 초기화 및 `CHARACTER_READY` 발행 틀
+- [x] Kafka SEARCH/INFO 토픽 연동 (Logic 서버 실제 통신 검증 완료)
+  - `character_search_ready/failed`, `character_detail_ready/failed` 발행
+  - `correlationId` 기반 요청-응답 매칭
+  - KafkaConsumer fields 필터 제거 (수신 메시지 전체 파싱)
+- [x] 동일 캐릭터 중복 fetch 방지 (`inFlight` 맵 + mutex)
 - [x] jsoncpp string_view 무한재귀 버그 수정 (dlsym shim)
 
 ### 예정
@@ -193,7 +244,7 @@ CharacterService::getFullApiFetch
 - [ ] Redis 캐릭터 스펙 데이터 저장 (로직 서버 설계 후 진행)
 - [ ] 검색 DB-first: DB에 있으면 Nexon API 호출 생략
 - [ ] FRESH 시 DB 데이터 반환 (현재는 `{"status":"FRESH"}` 만 반환)
-- [ ] Kafka 메시지 포맷/토픽 확정 (Logic 서버 연동 시)
+- [ ] timeline, auction Kafka 핸들러 구현
 - [ ] 유저/인증 시스템
 
 ---

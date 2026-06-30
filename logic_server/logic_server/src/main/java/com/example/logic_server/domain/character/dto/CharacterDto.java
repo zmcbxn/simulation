@@ -3,6 +3,8 @@ package com.example.logic_server.domain.character.dto;
 import com.example.logic_server.domain.character.entity.CharacterEntity;
 import lombok.*;
 
+import java.time.OffsetDateTime;
+
 @Getter
 @Setter
 @NoArgsConstructor
@@ -16,9 +18,7 @@ public class CharacterDto {
     private String jobName;
     private String jobGrowName;
     private Integer level;
-    private String guildName;
-    private Integer fame;
-    private String updatedDate;
+    private OffsetDateTime updatedDate;
 
     public static CharacterDto fromEntity(CharacterEntity entity) {
         return CharacterDto.builder()
@@ -29,9 +29,7 @@ public class CharacterDto {
                 .jobName(entity.getJobName())
                 .jobGrowName(entity.getJobGrowName())
                 .level(entity.getLevel())
-                .guildName(entity.getGuildName())
-                .fame(entity.getFame())
-                .updatedDate(entity.getUpdatedDate().toString())
+                .updatedDate(entity.getUpdatedDate())
                 .build();
     }
 }

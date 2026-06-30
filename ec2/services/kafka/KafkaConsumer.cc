@@ -50,15 +50,8 @@ void KafkaConsumer::run(){
         Json::Reader reader;
 
         if(reader.parse(payload, root)){
-            Json::Value extractedData;
-            for(const auto& field : fields_){
-                if(root.isMember(field)){
-                    extractedData[field] = root[field];
-                }
-            }
-
             if(topicHandler_){
-                topicHandler_(extractedData);
+                topicHandler_(root);
             }
         }
     }

@@ -5,22 +5,18 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.annotation.EnableKafka;
 import org.springframework.kafka.config.TopicBuilder;
-import org.springframework.kafka.support.converter.JacksonJsonMessageConverter;
-import org.springframework.kafka.support.converter.RecordMessageConverter;
 
 @Configuration
 @EnableKafka
 public class KafkaConfig {
+
     @Bean
-    public RecordMessageConverter recordMessageConverter() {
-        return new JacksonJsonMessageConverter();
+    public NewTopic searchTopic() {
+        return TopicBuilder.name("SEARCH").partitions(1).replicas(1).build();
     }
 
     @Bean
-    public NewTopic characterTopic() {
-        return TopicBuilder.name("CHARACTER")
-                .partitions(1)
-                .replicas(1)
-                .build();
+    public NewTopic infoTopic() {
+        return TopicBuilder.name("INFO").partitions(1).replicas(1).build();
     }
 }

@@ -5,7 +5,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 
 @Entity
 @Table(name = "base_data", schema = "character")
@@ -36,12 +36,6 @@ public class CharacterEntity {
     @Column(name = "level")
     private Integer level;
 
-    @Column(name = "guild_name")
-    private String guildName;
-
-    @Column(name = "fame")
-    private Integer fame;
-
     @Column(name = "updated_date")
-    private LocalDateTime updatedDate;
+    private OffsetDateTime updatedDate;
 }

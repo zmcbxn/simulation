@@ -30,10 +30,11 @@ void CharacterService::updateRedisUpdateTime(const std::string& sCharacterId) {
 }
 
 // ── processSearchCharacter ─────────────────────────────────────────────────────
-void CharacterService::processSearchCharacter(const std::string& characterName, const std::string& userId, std::function<void(const Json::Value&)> callback)
+void CharacterService::processSearchCharacter(const std::string& characterName, const std::string& userId, const std::string& correlationId, std::function<void(const Json::Value&)> callback)
 {
     apiClient_.fetchCharacter(characterName, userId, [=, this](const drogon::HttpResponsePtr& response) {
         if (!response || response->getStatusCode() != 200) {
+            publishCharacterSearchFailed(characterName, "Failed to fetch character data", correlationId);
             Json::Value err;
             err["error"] = "Failed to fetch character data";
             callback(err);
@@ -43,23 +44,27 @@ void CharacterService::processSearchCharacter(const std::string& characterName, 
         const Json::Value& characterJson = *(response->getJsonObject());
         const Json::Value& rows = characterJson["rows"];
 
-        // rows 존재 여부를 먼저 확인한 뒤 DB/Redis 작업 수행
         if (rows.empty()) {
+            publishCharacterSearchFailed(characterName, "Character not found", correlationId);
             Json::Value err;
             err["error"] = "Character not found";
             callback(err);
             return;
         }
 
-        for (const auto& row : rows)
+        std::vector<std::string> serverList;
+        for (const auto& row : rows) {
             dao_->upsertBaseData(row);
+            serverList.push_back(row["serverId"].asString());
+        }
 
+        publishCharacterSearchReady(characterName, serverList, correlationId);
         callback(characterJson);
     });
 }
 
 // ── processCharacterRequest ────────────────────────────────────────────────────
-void CharacterService::processCharacterRequest(const std::string& serverId, const std::string& characterName, int logicType, const std::string& userId, std::function<void(const Json::Value&)> callback)
+void CharacterService::processCharacterRequest(const std::string& serverId, const std::string& characterName, int logicType, const std::string& userId, const std::string& correlationId, std::function<void(const Json::Value&)> callback)
 {
     apiClient_.fetchCharacter(characterName, userId, [=, this](const drogon::HttpResponsePtr& response) {
         if (!response || response->getStatusCode() != 200) {
@@ -114,12 +119,12 @@ void CharacterService::processCharacterRequest(const std::string& serverId, cons
                     res["status"] = "FRESH";
                     callback(res);
                 } else {
-                    this->getFullApiFetch(sCharacterId, sServerId, characterInfo, userId, callback);
+                    this->getFullApiFetch(sCharacterId, sServerId, characterInfo, userId, correlationId, callback);
                 }
             },
             [=, this](const drogon::nosql::RedisException& err) {
                 LOG_ERROR << "Redis GET error: " << err.what();
-                this->getFullApiFetch(sCharacterId, sServerId, characterInfo, userId, callback);
+                this->getFullApiFetch(sCharacterId, sServerId, characterInfo, userId, correlationId, callback);
             },
             "HGET %s update_time", redisKey.c_str()
         );
@@ -169,8 +174,19 @@ void CharacterService::getFullApiFetch(
     const std::string& sServerId,
     const Json::Value& characterInfo,
     const std::string& userId,
+    const std::string& correlationId,
     std::function<void(const Json::Value&)> callback)
 {
+    // ── 중복 fetch 방지 (Kafka 경로만 적용, correlationId 없으면 HTTP 직접 호출) ──
+    // 병목 발생 시 샤딩: Map[0]~Map[N-1] 각각 독립 mutex, characterId 해시값 % N으로 분산
+    if (!correlationId.empty()) {
+        std::lock_guard<std::mutex> lk(inFlightMu_);
+        std::string key = sServerId + ":" + sCharacterId;
+        auto& vec = inFlight_[key];
+        vec.push_back(correlationId);
+        if (vec.size() > 1) return;  // 이미 진행 중 → 대기열에 추가만, fetch 생략
+    }
+
     auto ctx = std::make_shared<ApiFetchContext>();
     ctx->character             = std::make_shared<Character>();
     ctx->character->characterId = sCharacterId;
@@ -179,31 +195,48 @@ void CharacterService::getFullApiFetch(
 
     auto* loop = drogon::app().getLoop();
 
+    // inFlight에서 대기 중인 correlationId 전체를 꺼내고 키를 삭제하는 헬퍼
+    auto drainInFlight = [this, sServerId, sCharacterId, &correlationId]() -> std::vector<std::string> {
+        if (correlationId.empty()) return {};
+        std::lock_guard<std::mutex> lk(inFlightMu_);
+        std::string key = sServerId + ":" + sCharacterId;
+        auto it = inFlight_.find(key);
+        if (it == inFlight_.end()) return {};
+        auto vec = std::move(it->second);
+        inFlight_.erase(it);
+        return vec;
+    };
+
     // ── 전체 타임아웃 30초 ──────────────────────────────────────────────────
-    ctx->timerId = loop->runAfter(30.0, [ctx]() {
+    ctx->timerId = loop->runAfter(30.0, [ctx, sCharacterId, sServerId, drainInFlight, this]() {
         if (ctx->done.exchange(true)) return;
         LOG_WARN << "getFullApiFetch timed out: " << ctx->character->characterId;
+        for (const auto& cid : drainInFlight())
+            this->publishCharacterFailed(sCharacterId, sServerId, "API fetch timed out", cid);
         Json::Value err;
         err["error"] = "API fetch timed out";
         ctx->callback(err);
     });
 
     // ── 에러 확정 (최초 1회만 실행) ────────────────────────────────────────
-    auto doAbort = [ctx](const std::string& msg) {
+    auto doAbort = [ctx, sCharacterId, sServerId, drainInFlight, this](const std::string& msg) {
         if (ctx->done.exchange(true)) return;
         drogon::app().getLoop()->invalidateTimer(ctx->timerId);
         LOG_ERROR << "getFullApiFetch aborted: " << msg;
+        for (const auto& cid : drainInFlight())
+            this->publishCharacterFailed(sCharacterId, sServerId, msg, cid);
         Json::Value err;
         err["error"] = msg;
         ctx->callback(err);
     };
 
     // ── 성공 확정 (remaining == 0 일 때 최초 1회만 실행) ───────────────────
-    auto doFinalize = [ctx, characterInfo, sCharacterId, sServerId, this]() {
+    auto doFinalize = [ctx, characterInfo, sCharacterId, sServerId, drainInFlight, this]() {
         drogon::app().getLoop()->invalidateTimer(ctx->timerId);
         this->saveToDatabase(*ctx->character, characterInfo);
         this->updateRedisUpdateTime(sCharacterId);
-        this->publishCharacterReady(sCharacterId, sServerId);
+        for (const auto& cid : drainInFlight())
+            this->publishCharacterReady(sCharacterId, sServerId, cid);
         ctx->callback(ctx->character->toJson());
     };
 
@@ -320,8 +353,55 @@ void CharacterService::saveToDatabase(const Character& character, const Json::Va
         dao_->upsertTimelineData(character.characterId, character.serverId, character.timelineData);
 }
 
+// ── publishCharacterFailed ─────────────────────────────────────────────────────
+void CharacterService::publishCharacterFailed(const std::string& characterId, const std::string& serverId, const std::string& reason, const std::string& correlationId)
+{
+    if (!kafkaProducer_) return;
+
+    Json::Value msg;
+    msg["action"]        = "character_detail_failed";
+    msg["correlationId"] = correlationId;
+    msg["characterId"]   = characterId;
+    msg["serverId"]      = serverId;
+    msg["reason"]        = reason;
+
+    Json::FastWriter writer;
+    kafkaProducer_->send("INFO", writer.write(msg), characterId);
+}
+
+// ── publishCharacterSearchReady ────────────────────────────────────────────────
+void CharacterService::publishCharacterSearchReady(const std::string& characterName, const std::vector<std::string>& serverList, const std::string& correlationId)
+{
+    if (!kafkaProducer_ || correlationId.empty()) return;
+
+    Json::Value msg;
+    msg["action"]        = "character_search_ready";
+    msg["correlationId"] = correlationId;
+    msg["characterName"] = characterName;
+    for (const auto& s : serverList)
+        msg["serverList"].append(s);
+
+    Json::FastWriter writer;
+    kafkaProducer_->send("INFO", writer.write(msg), characterName);
+}
+
+// ── publishCharacterSearchFailed ───────────────────────────────────────────────
+void CharacterService::publishCharacterSearchFailed(const std::string& characterName, const std::string& reason, const std::string& correlationId)
+{
+    if (!kafkaProducer_ || correlationId.empty()) return;
+
+    Json::Value msg;
+    msg["action"]        = "character_search_failed";
+    msg["correlationId"] = correlationId;
+    msg["characterName"] = characterName;
+    msg["reason"]        = reason;
+
+    Json::FastWriter writer;
+    kafkaProducer_->send("INFO", writer.write(msg), characterName);
+}
+
 // ── publishCharacterReady ──────────────────────────────────────────────────────
-void CharacterService::publishCharacterReady(const std::string& characterId, const std::string& serverId)
+void CharacterService::publishCharacterReady(const std::string& characterId, const std::string& serverId, const std::string& correlationId)
 {
     if (!kafkaProducer_) {
         LOG_WARN << "KafkaProducer not set, skipping publishCharacterReady";
@@ -329,10 +409,11 @@ void CharacterService::publishCharacterReady(const std::string& characterId, con
     }
 
     Json::Value msg;
-    msg["action"]      = "CHARACTER_READY";
-    msg["characterId"] = characterId;
-    msg["serverId"]    = serverId;
+    msg["action"]        = "character_detail_ready";
+    msg["correlationId"] = correlationId;
+    msg["characterId"]   = characterId;
+    msg["serverId"]      = serverId;
 
     Json::FastWriter writer;
-    kafkaProducer_->send("comm.to.logic", writer.write(msg), characterId);
+    kafkaProducer_->send("INFO", writer.write(msg), characterId);
 }
