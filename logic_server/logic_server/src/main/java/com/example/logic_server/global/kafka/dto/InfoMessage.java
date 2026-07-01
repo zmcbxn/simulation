@@ -15,4 +15,5 @@ public class InfoMessage {
     private String characterId;
     private String serverId;
     private String reason;
+    private Boolean refreshed;
 }

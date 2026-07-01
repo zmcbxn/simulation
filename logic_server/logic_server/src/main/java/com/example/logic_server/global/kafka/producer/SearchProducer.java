@@ -30,8 +30,7 @@ public class SearchProducer {
         return correlationId;
     }
 
-    public String publishCharacterDetail(String serverId, String characterId, int type) {
-        String correlationId = UUID.randomUUID().toString();
+    public void publishCharacterDetail(String correlationId, String serverId, String characterId, int type) {
         SearchMessage msg = SearchMessage.builder()
                 .correlationId(correlationId)
                 .action("character_detail")
@@ -40,7 +39,6 @@ public class SearchProducer {
                 .type(type)
                 .build();
         send(msg);
-        return correlationId;
     }
 
     private void send(SearchMessage msg) {

@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -25,8 +26,8 @@ public class CharacterService {
 
     public void searchWithSse(String serverId, String name, SseEmitter emitter) {
         List<CharacterEntity> cached = "all".equals(serverId)
-                ? characterRepository.findAllByCharacterName(name)
-                : characterRepository.findByServerIdAndCharacterName(serverId, name);
+                ? characterRepository.findAllByCharacterNameIgnoreCase(name)
+                : characterRepository.findByServerIdAndCharacterNameIgnoreCase(serverId, name);
 
         if (!cached.isEmpty()) {
             sendResult(emitter, cached);
@@ -38,10 +39,33 @@ public class CharacterService {
     }
 
     public List<CharacterDto> searchByAdventureName(String adventureName) {
-        return characterRepository.findByAdventureName(adventureName)
-                .stream()
-                .map(CharacterDto::fromEntity)
-                .toList();
+        return characterRepository.findByAdventureName(adventureName);
+    }
+
+    public void getDetailWithSse(String serverId, String characterId, SseEmitter emitter) {
+        String correlationId = "D:" + UUID.randomUUID();
+        searchProducer.publishCharacterDetail(correlationId, serverId, characterId, 0);
+        emitter.onTimeout(() -> {
+            sseRegistry.remove(correlationId);
+            try {
+                emitter.send(SseEmitter.event().name("error").data("{\"message\":\"요청 시간이 초과되었습니다.\"}"));
+            } catch (Exception ignored) {}
+            emitter.complete();
+        });
+        sseRegistry.register(correlationId, emitter);
+    }
+
+    public void refreshWithSse(String serverId, String characterId, SseEmitter emitter) {
+        String correlationId = "R:" + UUID.randomUUID();
+        searchProducer.publishCharacterDetail(correlationId, serverId, characterId, 1);
+        emitter.onTimeout(() -> {
+            sseRegistry.remove(correlationId);
+            try {
+                emitter.send(SseEmitter.event().name("error").data("{\"message\":\"요청 시간이 초과되었습니다.\"}"));
+            } catch (Exception ignored) {}
+            emitter.complete();
+        });
+        sseRegistry.register(correlationId, emitter);
     }
 
     private void sendResult(SseEmitter emitter, List<CharacterEntity> entities) {

@@ -24,9 +24,6 @@ public class CharacterEntity {
     @Column(name = "character_name", nullable = false)
     private String characterName;
 
-    @Column(name = "adventure_name")
-    private String adventureName;
-
     @Column(name = "job_name")
     private String jobName;
 

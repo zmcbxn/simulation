@@ -1,8 +1,11 @@
 package com.example.logic_server.global.kafka.consumer;
 
+import com.example.logic_server.domain.character.dto.CharacterDetailDto;
 import com.example.logic_server.domain.character.dto.CharacterDto;
 import com.example.logic_server.domain.character.entity.CharacterEntity;
 import com.example.logic_server.domain.character.repository.CharacterRepository;
+import com.example.logic_server.domain.character.service.EquipmentService;
+import com.example.logic_server.domain.character.service.StatusService;
 import com.example.logic_server.global.kafka.dto.InfoMessage;
 import com.example.logic_server.global.sse.SseRegistry;
 import tools.jackson.databind.ObjectMapper;
@@ -21,6 +24,8 @@ public class InfoConsumer {
 
     private final SseRegistry sseRegistry;
     private final CharacterRepository characterRepository;
+    private final StatusService statusService;
+    private final EquipmentService equipmentService;
     private final ObjectMapper objectMapper;
 
     @KafkaListener(topics = "INFO", groupId = "logic-server-group")
@@ -45,7 +50,7 @@ public class InfoConsumer {
 
         try {
             List<CharacterEntity> entities = characterRepository
-                    .findByCharacterNameAndServerIdIn(msg.getCharacterName(), msg.getServerList());
+                    .findByCharacterNameIgnoreCaseAndServerIdIn(msg.getCharacterName(), msg.getServerList());
             List<CharacterDto> dtos = entities.stream().map(CharacterDto::fromEntity).toList();
 
             emitter.send(SseEmitter.event()
@@ -60,8 +65,40 @@ public class InfoConsumer {
     }
 
     private void handleDetailReady(InfoMessage msg) {
-        // TODO: 캐릭터 상세 구현 시 작성
-        log.info("[InfoConsumer] character_detail_ready: {}/{}", msg.getServerId(), msg.getCharacterId());
+        String correlationId = msg.getCorrelationId();
+        SseEmitter emitter = sseRegistry.get(correlationId);
+        if (emitter == null) return;
+
+        try {
+            if (correlationId.startsWith("R:")) {
+                // 새로고침 요청
+                if (Boolean.TRUE.equals(msg.getRefreshed())) {
+                    emitter.send(SseEmitter.event()
+                            .name("result")
+                            .data("{\"refreshed\":true}"));
+                } else {
+                    long cooldown = statusService.getCooldownSeconds(msg.getServerId(), msg.getCharacterId());
+                    emitter.send(SseEmitter.event()
+                            .name("result")
+                            .data("{\"refreshed\":false,\"cooldownSeconds\":" + cooldown + "}"));
+                }
+            } else {
+                // 일반 상세 요청
+                CharacterDetailDto detail = CharacterDetailDto.builder()
+                        .status(statusService.getStatus(msg.getServerId(), msg.getCharacterId()))
+                        .equipment(equipmentService.getEquipment(msg.getServerId(), msg.getCharacterId()))
+                        .build();
+                emitter.send(SseEmitter.event()
+                        .name("result")
+                        .data(objectMapper.writeValueAsString(detail)));
+            }
+            emitter.complete();
+        } catch (Exception e) {
+            log.error("[InfoConsumer] handleDetailReady error: {}", e.getMessage());
+            emitter.completeWithError(e);
+        } finally {
+            sseRegistry.remove(correlationId);
+        }
     }
 
     private void handleFailed(InfoMessage msg) {

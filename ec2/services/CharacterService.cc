@@ -64,71 +64,36 @@ void CharacterService::processSearchCharacter(const std::string& characterName, 
 }
 
 // ── processCharacterRequest ────────────────────────────────────────────────────
-void CharacterService::processCharacterRequest(const std::string& serverId, const std::string& characterName, int logicType, const std::string& userId, const std::string& correlationId, std::function<void(const Json::Value&)> callback)
+void CharacterService::processCharacterRequest(const std::string& serverId, const std::string& characterId, int logicType, const std::string& userId, const std::string& correlationId, std::function<void(const Json::Value&)> callback)
 {
-    apiClient_.fetchCharacter(characterName, userId, [=, this](const drogon::HttpResponsePtr& response) {
-        if (!response || response->getStatusCode() != 200) {
-            Json::Value err;
-            err["error"] = "Failed to fetch character data";
-            callback(err);
-            return;
-        }
+    std::string redisKey = "char:" + characterId;
 
-        const Json::Value& characterJson = *(response->getJsonObject());
-        const Json::Value& rows = characterJson["rows"];
-
-        if (rows.empty()) {
-            Json::Value err;
-            err["error"] = "Character not found";
-            callback(err);
-            return;
-        }
-
-        Json::Value characterInfo = Json::nullValue;
-        for (const auto& row : rows) {
-            if (row["serverId"].asString() == serverId) {
-                characterInfo = row;
-                break;
+    auto redisClient = drogon::app().getRedisClient();
+    redisClient->execCommandAsync(
+        [=, this](const drogon::nosql::RedisResult& result) {
+            bool needUpdate = true;
+            long long currentTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+            if (!result.isNil()) {
+                long long lastUpdateTime = std::stoll(result.asString());
+                long long updateInterval = (logicType == 1) ? 60 : 1800;
+                if (currentTime - lastUpdateTime < updateInterval)
+                    needUpdate = false;
             }
-        }
-
-        if (characterInfo.isNull()) {
-            Json::Value err;
-            err["error"] = "Character not found in the specified server";
-            callback(err);
-            return;
-        }
-
-        std::string sServerId    = characterInfo["serverId"].asString();
-        std::string sCharacterId = characterInfo["characterId"].asString();
-        std::string redisKey     = "char:" + sCharacterId;
-
-        auto redisClient = drogon::app().getRedisClient();
-        redisClient->execCommandAsync(
-            [=, this](const drogon::nosql::RedisResult& result) {
-                bool needUpdate = true;
-                long long currentTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-                if (!result.isNil()) {
-                    long long lastUpdateTime  = std::stoll(result.asString());
-                    long long updateInterval  = (logicType == 1) ? 60 : 1800;
-                    if (currentTime - lastUpdateTime < updateInterval)
-                        needUpdate = false;
-                }
-                if (!needUpdate) {
-                    Json::Value res;
-                    res["status"] = "FRESH";
-                    callback(res);
-                } else {
-                    this->getFullApiFetch(sCharacterId, sServerId, characterInfo, userId, correlationId, callback);
-                }
-            },
-            [=, this](const drogon::nosql::RedisException& err) {
-                LOG_ERROR << "Redis GET error: " << err.what();
-                this->getFullApiFetch(sCharacterId, sServerId, characterInfo, userId, correlationId, callback);
-            },
-            "HGET %s update_time", redisKey.c_str()
-        );
-    });
+            if (!needUpdate) {
+                this->publishCharacterReady(characterId, serverId, correlationId, false);
+                Json::Value res;
+                res["status"] = "FRESH";
+                callback(res);
+            } else {
+                this->getFullApiFetch(characterId, serverId, userId, correlationId, callback);
+            }
+        },
+        [=, this](const drogon::nosql::RedisException& err) {
+            LOG_ERROR << "Redis GET error: " << err.what();
+            this->getFullApiFetch(characterId, serverId, userId, correlationId, callback);
+        },
+        "HGET %s update_time", redisKey.c_str()
+    );
 }
 
 // ── getFullApiFetch 내부 집계 Context ─────────────────────────────────────────
@@ -172,7 +137,6 @@ static void fetchWithRetry(
 void CharacterService::getFullApiFetch(
     const std::string& sCharacterId,
     const std::string& sServerId,
-    const Json::Value& characterInfo,
     const std::string& userId,
     const std::string& correlationId,
     std::function<void(const Json::Value&)> callback)
@@ -231,12 +195,12 @@ void CharacterService::getFullApiFetch(
     };
 
     // ── 성공 확정 (remaining == 0 일 때 최초 1회만 실행) ───────────────────
-    auto doFinalize = [ctx, characterInfo, sCharacterId, sServerId, drainInFlight, this]() {
+    auto doFinalize = [ctx, sCharacterId, sServerId, drainInFlight, this]() {
         drogon::app().getLoop()->invalidateTimer(ctx->timerId);
-        this->saveToDatabase(*ctx->character, characterInfo);
+        this->saveToDatabase(*ctx->character);
         this->updateRedisUpdateTime(sCharacterId);
         for (const auto& cid : drainInFlight())
-            this->publishCharacterReady(sCharacterId, sServerId, cid);
+            this->publishCharacterReady(sCharacterId, sServerId, cid, true);
         ctx->callback(ctx->character->toJson());
     };
 
@@ -317,13 +281,16 @@ void CharacterService::getFullApiFetch(
 }
 
 // ── saveToDatabase ─────────────────────────────────────────────────────────────
-void CharacterService::saveToDatabase(const Character& character, const Json::Value& characterInfo)
+void CharacterService::saveToDatabase(const Character& character)
 {
-    Json::Value baseDataToSave = characterInfo;
-    if (character.statusData.isMember("adventureName"))
-        baseDataToSave["adventureName"] = character.statusData["adventureName"];
-    if (character.statusData.isMember("guildName"))
-        baseDataToSave["guildName"] = character.statusData["guildName"];
+    // base_data에 필요한 필드는 status API 응답에 모두 포함되어 있음
+    Json::Value baseDataToSave;
+    baseDataToSave["characterId"]  = character.characterId;
+    baseDataToSave["serverId"]     = character.serverId;
+    baseDataToSave["characterName"] = character.statusData["characterName"];
+    baseDataToSave["jobName"]      = character.statusData["jobName"];
+    baseDataToSave["jobGrowName"]  = character.statusData["jobGrowName"];
+    baseDataToSave["level"]        = character.statusData["level"];
 
     dao_->upsertBaseData(baseDataToSave);
     dao_->upsertStatusData(character.characterId, character.serverId, character.statusData);
@@ -401,7 +368,7 @@ void CharacterService::publishCharacterSearchFailed(const std::string& character
 }
 
 // ── publishCharacterReady ──────────────────────────────────────────────────────
-void CharacterService::publishCharacterReady(const std::string& characterId, const std::string& serverId, const std::string& correlationId)
+void CharacterService::publishCharacterReady(const std::string& characterId, const std::string& serverId, const std::string& correlationId, bool refreshed)
 {
     if (!kafkaProducer_) {
         LOG_WARN << "KafkaProducer not set, skipping publishCharacterReady";
@@ -413,6 +380,7 @@ void CharacterService::publishCharacterReady(const std::string& characterId, con
     msg["correlationId"] = correlationId;
     msg["characterId"]   = characterId;
     msg["serverId"]      = serverId;
+    msg["refreshed"]     = refreshed;
 
     Json::FastWriter writer;
     kafkaProducer_->send("INFO", writer.write(msg), characterId);

@@ -25,7 +25,6 @@ public class CharacterDto {
                 .characterId(entity.getCharacterId())
                 .serverId(entity.getServerId())
                 .characterName(entity.getCharacterName())
-                .adventureName(entity.getAdventureName())
                 .jobName(entity.getJobName())
                 .jobGrowName(entity.getJobGrowName())
                 .level(entity.getLevel())

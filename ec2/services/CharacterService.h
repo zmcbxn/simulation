@@ -25,18 +25,18 @@ public:
     void processSearchCharacter(const std::string& characterName, const std::string& userId, std::function<void(const Json::Value&)> callback) {
         processSearchCharacter(characterName, userId, "", std::move(callback));
     }
-    void processCharacterRequest(const std::string& serverId, const std::string& characterName, int logicType, const std::string& userId, const std::string& correlationId, std::function<void(const Json::Value&)> callback);
-    void getFullApiFetch(const std::string& sCharacterId, const std::string& sServerId, const Json::Value& characterInfo, const std::string& userId, const std::string& correlationId, std::function<void(const Json::Value&)> callback);
+    void processCharacterRequest(const std::string& serverId, const std::string& characterId, int logicType, const std::string& userId, const std::string& correlationId, std::function<void(const Json::Value&)> callback);
+    void getFullApiFetch(const std::string& sCharacterId, const std::string& sServerId, const std::string& userId, const std::string& correlationId, std::function<void(const Json::Value&)> callback);
 
 private:
     ApiClient apiClient_;
     std::unique_ptr<CharacterDAO> dao_;
     std::shared_ptr<KafkaProducer> kafkaProducer_;
 
-    void saveToDatabase(const Character& character, const Json::Value& characterInfo);
+    void saveToDatabase(const Character& character);
     void publishCharacterSearchReady(const std::string& characterName, const std::vector<std::string>& serverList, const std::string& correlationId);
     void publishCharacterSearchFailed(const std::string& characterName, const std::string& reason, const std::string& correlationId);
-    void publishCharacterReady(const std::string& characterId, const std::string& serverId, const std::string& correlationId);
+    void publishCharacterReady(const std::string& characterId, const std::string& serverId, const std::string& correlationId, bool refreshed);
     void publishCharacterFailed(const std::string& characterId, const std::string& serverId, const std::string& reason, const std::string& correlationId);
 
     // 진행 중인 fetch 추적 — 동일 캐릭터 중복 요청 방지

@@ -46,10 +46,10 @@ Nexon 외부 API 데이터 수집, DB/Redis 저장, Logic 서버와의 Kafka 통
 { "correlationId": "uuid", "action": "character_search", "characterName": "더스크워치" }
 
 // character_detail
-{ "correlationId": "uuid", "action": "character_detail", "serverId": "prey", "characterName": "더스크워치", "type": 0 }
+{ "correlationId": "uuid", "action": "character_detail", "serverId": "prey", "characterId": "d95db8ac...", "type": 0 }
 ```
 > `correlationId`: Logic 서버가 생성한 UUID. INFO 응답 매칭용  
-> `type`: 0 = 자동(쿨다운 1800초), 1 = 수동 새로고침(쿨다운 60초)
+> `type`: 0 = 자동 갱신(쿨다운 1800초), 1 = 수동 새로고침(쿨다운 60초)
 
 ---
 
@@ -74,8 +74,9 @@ Nexon 외부 API 데이터 수집, DB/Redis 저장, Logic 서버와의 Kafka 통
 // character_search_failed
 { "correlationId": "uuid", "action": "character_search_failed", "characterName": "더스크워치", "reason": "..." }
 
-// character_detail_ready
-{ "correlationId": "uuid", "action": "character_detail_ready", "characterId": "f0fa67...", "serverId": "prey" }
+// character_detail_ready (refreshed: true=API 새로 수집, false=쿨다운으로 기존 데이터 반환)
+{ "correlationId": "uuid", "action": "character_detail_ready", "characterId": "f0fa67...", "serverId": "prey", "refreshed": true }
+{ "correlationId": "uuid", "action": "character_detail_ready", "characterId": "f0fa67...", "serverId": "prey", "refreshed": false }
 
 // character_detail_failed
 { "correlationId": "uuid", "action": "character_detail_failed", "characterId": "f0fa67...", "serverId": "prey", "reason": "API fetch timed out" }

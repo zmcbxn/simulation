@@ -96,11 +96,11 @@ void KafkaManager::registerHandlers(){
     };
 
     topicHandlers_["character_detail"] = [this](const Json::Value& data) {
-        std::string userId         = data.get("userId", "").asString();
-        std::string correlationId  = data.get("correlationId", "").asString();
+        std::string userId        = data.get("userId", "").asString();
+        std::string correlationId = data.get("correlationId", "").asString();
         ServiceFactory::getCharacterService()->processCharacterRequest(
             data["serverId"].asString(),
-            data["characterName"].asString(),
+            data["characterId"].asString(),
             data["type"].asInt(),
             userId,
             correlationId,

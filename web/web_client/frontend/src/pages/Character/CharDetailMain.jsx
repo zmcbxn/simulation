@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import apiClient from '../../api/apiClient';
+import { useEffect, useState, useCallback } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { SERVER_NAME_MAP } from '../../constants/servers';
 import EquipmentTab from './tabs/EquipmentTab';
 import InfoTab from './tabs/InfoTab';
 import AvatarTab from './tabs/AvatarTab';
@@ -19,54 +19,76 @@ const TABS = [
     { key: 'skilltree', label: '스킬트리' },
 ];
 
-// TODO: 백엔드 API 엔드포인트 확정 후 연결
-// GET /api/character/:serverId/:characterId
-// 응답: { base, status, equipment, avatar, creature, skill, buff, ... }
-const fetchCharacterDetail = async (serverId, characterId) => {
-    const res = await apiClient.get(`/api/character/${serverId}/${characterId}`);
-    return res.data;
-};
-
-const MOCK = {
-    characterId: '7deb7e1058bef8bfee9adb04e6cf7928',
-    serverId: 'cain',
-    serverName: '카인',
-    characterName: '테스트캐릭터',
-    jobName: '眞 웨펀마스터',
-    level: 110,
-    fame: 123456,
-    adventureName: '테스트모험단',
-};
 
 const CharDetailMain = () => {
     const { serverId, characterId } = useParams();
+    const navigate = useNavigate();
     const [character, setCharacter] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [activeTab, setActiveTab] = useState('equipment');
+    const [refreshing, setRefreshing] = useState(false);
+    const [fetchTrigger, setFetchTrigger] = useState(0);
+
+    const handleRefresh = useCallback(() => {
+        if (refreshing) return;
+        setRefreshing(true);
+
+        const es = new EventSource(`/api/character/${serverId}/${characterId}/refresh`);
+
+        es.addEventListener('result', (e) => {
+            const { refreshed, cooldownSeconds } = JSON.parse(e.data);
+            setRefreshing(false);
+            es.close();
+            if (refreshed) {
+                setFetchTrigger((n) => n + 1);
+            } else {
+                alert(`${cooldownSeconds}초 후 새로고침 가능합니다.`);
+            }
+        });
+
+        es.onerror = () => {
+            setRefreshing(false);
+            alert('새로고침 요청에 실패했습니다.');
+            es.close();
+        };
+    }, [serverId, characterId, refreshing]);
 
     useEffect(() => {
-        const load = async () => {
-            setLoading(true);
-            setError('');
-            try {
-                const data = await fetchCharacterDetail(serverId, characterId);
-                setCharacter(data);
-            } catch {
-                // TODO: 백엔드 연동 후 목업 제거
-                setCharacter(MOCK);
-            } finally {
-                setLoading(false);
-            }
+        setLoading(true);
+        setError('');
+        setCharacter(null);
+
+        const es = new EventSource(`/api/character/${serverId}/${characterId}`);
+
+        es.addEventListener('result', (e) => {
+            setCharacter(JSON.parse(e.data));
+            setLoading(false);
+            es.close();
+        });
+
+        es.addEventListener('error', (e) => {
+            setError(e.data ? JSON.parse(e.data).message : '캐릭터 정보를 불러오지 못했습니다.');
+            setLoading(false);
+            es.close();
+        });
+
+        es.onerror = () => {
+            setError('서버 연결에 실패했습니다.');
+            setLoading(false);
+            es.close();
         };
-        load();
-    }, [serverId, characterId]);
+
+        return () => es.close();
+    }, [serverId, characterId, fetchTrigger]);
 
     if (loading) return <div style={styles.stateBox}>캐릭터 정보를 불러오는 중...</div>;
     if (error)   return <div style={{ ...styles.stateBox, color: '#e74c3c' }}>{error}</div>;
     if (!character) return null;
 
-    const imageUrl = `https://img-api.neople.co.kr/df/servers/${character.serverId}/characters/${character.characterId}?zoom=3`;
+    const st = character.status;
+    const serverName = SERVER_NAME_MAP[st.serverId] ?? st.serverId;
+    const imageUrl = `https://img-api.neople.co.kr/df/servers/${st.serverId}/characters/${st.characterId}?zoom=3`;
 
     const renderTab = () => {
         switch (activeTab) {
@@ -89,7 +111,7 @@ const CharDetailMain = () => {
                 <div style={styles.imageBox}>
                     <img
                         src={imageUrl}
-                        alt={character.characterName}
+                        alt={st.characterName}
                         style={styles.charImage}
                         onError={(e) => { e.target.style.background = '#eee'; e.target.style.display = 'block'; }}
                     />
@@ -97,15 +119,41 @@ const CharDetailMain = () => {
 
                 {/* 우측: 요약 정보 */}
                 <div style={styles.summaryInfo}>
-                    <div style={styles.charName}>{character.characterName}</div>
-                    <div style={styles.charSub}>
-                        {character.serverName} · {character.jobName} · {character.level}Lv
+                    <div style={styles.summaryHeader}>
+                        <div style={styles.charName}>{st.characterName}</div>
+                        <button
+                            style={styles.refreshBtn}
+                            onClick={handleRefresh}
+                            title="새로고침"
+                            disabled={refreshing}
+                        >
+                            <svg
+                                className={refreshing ? 'spinning' : ''}
+                                width="18" height="18" viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" strokeWidth="2.5"
+                                strokeLinecap="round" strokeLinejoin="round"
+                            >
+                                <path d="M23 4v6h-6"/>
+                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                            </svg>
+                        </button>
                     </div>
-                    {character.adventureName && (
-                        <div style={styles.adventure}>모험단: {character.adventureName}</div>
+                    {st.adventureName && (
+                        <div
+                            style={{ ...styles.charSub, ...styles.adventureLink }}
+                            onClick={() => navigate(`/search/adventureName/${st.adventureName}`)}
+                        >
+                            {st.adventureName}
+                        </div>
                     )}
-                    {character.fame && (
-                        <div style={styles.fame}>명성: {character.fame.toLocaleString()}</div>
+                    <div style={styles.charSub}>
+                        {serverName} · {st.jobName} · Lv.{st.level}
+                    </div>
+                    {st.guildName && (
+                        <div style={styles.meta}>길드: {st.guildName}</div>
+                    )}
+                    {st.fame != null && (
+                        <div style={styles.fame}>명성: {st.fame.toLocaleString()}</div>
                     )}
                 </div>
             </div>
@@ -156,9 +204,23 @@ const styles = {
     },
     charImage: { width: '180px', height: '180px', objectFit: 'contain' },
     summaryInfo: { display: 'flex', flexDirection: 'column', gap: '10px', padding: '1.5rem 2rem', flex: 1 },
+    summaryHeader: { display: 'flex', alignItems: 'center', gap: '10px' },
     charName: { fontSize: '1.8rem', fontWeight: 'bold' },
+    refreshBtn: {
+        background: 'none',
+        border: '1px solid #ddd',
+        borderRadius: '6px',
+        padding: '6px 8px',
+        cursor: 'pointer',
+        color: '#555',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+    },
     charSub: { fontSize: '1rem', color: '#555' },
-    adventure: { fontSize: '0.9rem', color: '#777' },
+    adventureLink: { cursor: 'pointer', color: '#2980b9' },
+    meta: { fontSize: '0.9rem', color: '#777' },
     fame: { fontSize: '0.95rem', color: '#2c3e50', fontWeight: '500' },
     tabBar: {
         display: 'flex',

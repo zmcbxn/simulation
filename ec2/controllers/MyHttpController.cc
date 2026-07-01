@@ -57,13 +57,13 @@ void MyHttpController::index(const HttpRequestPtr& req,
 void MyHttpController::getCharacter(const HttpRequestPtr& req,
                                     std::function<void (const HttpResponsePtr& )> &&callback,
                                     const std::string& serverId,
-                                    const std::string& characterName)
+                                    const std::string& characterId)
 {
     int logicType = 0;
 
     // TODO: 로그인 구현 후 세션에서 userId 추출하여 전달
     std::string userId = "";
-    characterService.processCharacterRequest(serverId, characterName, logicType, userId, "", [callback](const Json::Value& characterData) {
+    characterService.processCharacterRequest(serverId, characterId, logicType, userId, "", [callback](const Json::Value& characterData) {
         Json::Value response;
         if(characterData.isMember("error")) {
             response["status"] = "Character not found";
